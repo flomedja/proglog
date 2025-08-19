@@ -128,3 +128,109 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 	// Return the global offset that was assigned to this record
 	return cur, nil
 }
+
+// Read retrieves a record from the segment by its global offset.
+// The function performs a two-step lookup: first using the index to find the record's
+// position in the store, then reading the actual data from the store and deserializing it.
+// Parameters:
+// - off: the global offset of the record to retrieve
+// Returns:
+// - *api.Record: the deserialized record, or nil if not found
+// - error: any error encountered during the read operation
+func (s *segment) Read(off uint64) (*api.Record, error) {
+	// Convert global offset to relative offset for index lookup
+	// The index stores relative offsets (offset - baseOffset) for efficiency
+	// Example: if baseOffset=1000 and off=1005, we look up relative offset 5
+	_, pos, err := s.index.Read(int64(off - s.baseOffset))
+	if err != nil {
+		return nil, err
+	}
+
+	// Use the position returned by the index to read the raw data from the store
+	// The index told us "record is at position X in the store file"
+	p, err := s.store.Read(pos)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a new Record instance to deserialize into
+	record := &api.Record{}
+
+	// Deserialize the raw bytes back into a structured Record using protocol buffers
+	// This reverses the marshaling done in the Append function
+	err = proto.Unmarshal(p, record)
+
+	// Return the reconstructed record and any unmarshaling error
+	return record, err
+}
+
+func (s *segment) IsMaxed() bool {
+	return s.store.size >= s.config.Segment.MaxStoreBytes ||
+		s.index.size >= s.config.Segment.MaxIndexBytes
+}
+
+// Remove completely deletes the segment and its associated files from disk.
+// This function performs cleanup operations to properly close the segment before deletion,
+// ensuring that any buffered data is flushed and file handles are released.
+// Both the index file (.index) and store file (.store) are permanently deleted.
+// This operation is irreversible and should be used with caution.
+// Returns any error encountered during the close or file deletion operations.
+func (s *segment) Remove() error {
+	// First, properly close the segment to ensure all data is flushed to disk
+	// and file handles are released before attempting deletion
+	if err := s.Close(); err != nil {
+		return err
+	}
+
+	// Delete the index file from the filesystem
+	// This removes the offset-to-position mapping file (e.g., "1000.index")
+	if err := os.Remove(s.index.Name()); err != nil {
+		return err
+	}
+
+	// Delete the store file from the filesystem
+	// This removes the actual record data file (e.g., "1000.store")
+	if err := os.Remove(s.store.Name()); err != nil {
+		return err
+	}
+
+	// All files successfully deleted
+	return nil
+}
+
+func (s *segment) Close() error {
+	if err := s.index.Close(); err != nil {
+		return err
+	}
+	if err := s.store.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// nearestMultiple returns the largest multiple of k that is less than or equal to j.
+// This is commonly used for alignment purposes, such as creating segments at
+// predictable offset boundaries (e.g., offsets 0, 1000, 2000, etc.).
+//
+// Examples:
+//
+//	nearestMultiple(1537, 1000) = 1000
+//	nearestMultiple(2000, 1000) = 2000
+//	nearestMultiple(999, 1000) = 0
+//
+// Parameters:
+//
+//	j: the value to find the nearest multiple for
+//	k: the multiple base (must be > 0)
+//
+// Returns the largest multiple of k ≤ j, or 0 if k is 0.
+func nearestMultiple(j, k uint64) uint64 {
+	// Handle edge case: avoid division by zero
+	if k == 0 {
+		return 0
+	}
+
+	// For unsigned integers, this is simply integer division * k
+	// Integer division automatically floors the result
+	return (j / k) * k
+}
