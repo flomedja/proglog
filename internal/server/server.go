@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 
+	"google.golang.org/grpc"
+
 	api "github.com/flomedja/proglog/api/v1"
 )
 
@@ -10,7 +12,22 @@ type Config struct {
 	CommitLog CommitLog
 }
 
+type CommitLog interface {
+	Append(*api.Record) (uint64, error)
+	Read(uint64) (*api.Record, error)
+}
+
 var _ api.LogServer = (*grpcServer)(nil)
+
+func NewGRPCServer(config *Config) (*grpc.Server, error) {
+	gsrv := grpc.NewServer()
+	srv, err := newgrpcServer(config)
+	if err != nil {
+		return nil, err
+	}
+	api.RegisterLogServer(gsrv, srv)
+	return gsrv, nil
+}
 
 type grpcServer struct {
 	api.UnimplementedLogServer

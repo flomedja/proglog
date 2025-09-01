@@ -1,7 +1,6 @@
 package log
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path"
@@ -136,7 +135,7 @@ func (l *Log) Read(off uint64) (*api.Record, error) {
 
 	// Validate that we found a segment and the offset is within valid range
 	if s == nil || s.nextOffset <= off {
-		return nil, fmt.Errorf("offset out of range: %d", off)
+		return nil, api.ErrOffsetOutOfRange{Offset: off}
 	}
 
 	// Delegate to the segment's Read method to retrieve the actual record
